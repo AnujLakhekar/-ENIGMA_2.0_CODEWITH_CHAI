@@ -47,27 +47,13 @@ export const createAnalysis = mutation({
       abnormalSegments: 0,
       modelAccuracy: 0,
       confidence: 0,
-      aiModel: "CNN-LSTM Ensemble v2.1",
+      aiModel: "Advanced Spectral Analysis + CNN-LSTM v3.0",
       createdAt: Date.now(),
       status: "pending",
     });
 
-    // If demo mode, immediately populate with demo data
-    if (args.isDemoMode) {
-      await ctx.db.patch(analysisId, {
-        status: "completed",
-        riskScore: 28,
-        riskLevel: "Low",
-        channelsAnalyzed: 32,
-        abnormalSegments: 22,
-        modelAccuracy: 95.4,
-        confidence: 97.5,
-        waveformData: JSON.stringify(generateDemoWaveformData()),
-        shapValues: JSON.stringify(generateDemoShapData()),
-        brainMapData: JSON.stringify(generateDemoBrainMapData()),
-        modelMetrics: JSON.stringify(generateDemoModelMetrics()),
-      });
-    }
+    // ⚠️ REMOVED: Demo data generation
+    // Only real processed data from files will be shown
 
     return analysisId;
   },
@@ -131,7 +117,7 @@ export const deleteAnalysis = mutation({
   },
 });
 
-// Update analysis results from AI processing
+// Update analysis results from AI processing with REAL data only
 export const updateAnalysisResults = mutation({
   args: {
     analysisId: v.id("eegAnalyses"),
@@ -139,6 +125,7 @@ export const updateAnalysisResults = mutation({
     riskLevel: v.string(),
     abnormalSegments: v.number(),
     confidence: v.number(),
+    keyBiomarkers: v.optional(v.string()),
     status: v.string(),
   },
   handler: async (ctx, args) => {
@@ -285,84 +272,4 @@ function generateBrainMapFromChannels(channels: any[]) {
       value: normalizedValue,
     };
   });
-}
-
-// Helper functions to generate demo data
-function generateDemoWaveformData() {
-  const channels = ["Fp1", "F3", "C3", "P3", "O1", "F2", "C2"];
-  const dataPoints = 300;
-  
-  return channels.map((channel, idx) => {
-    const isAnomalous = idx <= 1 || idx === 6; // Fp1, F3, C2 are anomalous
-    const baseAmplitude = isAnomalous ? 80 : 40;
-    const frequency = isAnomalous ? 0.15 : 0.1;
-    
-    const data = Array.from({ length: dataPoints }, (_, i) => ({
-      x: i * 0.1,
-      y: baseAmplitude * Math.sin(frequency * i + idx) + Math.random() * 10,
-    }));
-    
-    return {
-      channel,
-      data,
-      isAnomalous,
-    };
-  });
-}
-
-function generateDemoShapData() {
-  return [
-    { feature: "Alpha Suppression", value: 0.28 },
-    { feature: "P300 Amplitude", value: -0.32 },
-    { feature: "Theta/Alpha Ratio", value: 0.20 },
-    { feature: "Occipital Alpha", value: -0.25 },
-    { feature: "Frontal Theta Power", value: 0.18 },
-    { feature: "Gamma Coherence", value: 0.15 },
-    { feature: "PLV Connectivity", value: -0.28 },
-    { feature: "Beta Asymmetry", value: 0.12 },
-  ];
-}
-
-function generateDemoBrainMapData() {
-  const electrodes = [
-    { name: "Fp1", x: 0.3, y: 0.15, value: 0.75 },
-    { name: "Fp2", x: 0.7, y: 0.15, value: 0.82 },
-    { name: "F7", x: 0.15, y: 0.35, value: 0.45 },
-    { name: "F3", x: 0.35, y: 0.3, value: 0.55 },
-    { name: "Fz", x: 0.5, y: 0.28, value: 0.68 },
-    { name: "F4", x: 0.65, y: 0.3, value: 0.72 },
-    { name: "F8", x: 0.85, y: 0.35, value: 0.62 },
-    { name: "T7", x: 0.1, y: 0.5, value: 0.78 },
-    { name: "C3", x: 0.3, y: 0.5, value: 0.38 },
-    { name: "Cz", x: 0.5, y: 0.5, value: 0.58 },
-    { name: "C4", x: 0.7, y: 0.5, value: 0.52 },
-    { name: "T8", x: 0.9, y: 0.5, value: 0.88 },
-    { name: "P7", x: 0.2, y: 0.7, value: 0.42 },
-    { name: "P3", x: 0.35, y: 0.68, value: 0.48 },
-    { name: "Pz", x: 0.5, y: 0.68, value: 0.55 },
-    { name: "P4", x: 0.65, y: 0.68, value: 0.45 },
-    { name: "P8", x: 0.8, y: 0.7, value: 0.65 },
-    { name: "O1", x: 0.4, y: 0.85, value: 0.35 },
-    { name: "Oz", x: 0.5, y: 0.88, value: 0.52 },
-    { name: "O2", x: 0.6, y: 0.85, value: 0.38 },
-  ];
-  
-  return electrodes;
-}
-
-function generateDemoModelMetrics() {
-  return {
-    accuracy: 94.7,
-    precision: 93.2,
-    recall: 95.3,
-    f1Score: 94.2,
-    rocAuc: 97.1,
-    models: [
-      { name: "CNN", accuracy: 91.2 },
-      { name: "LSTM", accuracy: 88.5 },
-      { name: "CNN-LSTM", accuracy: 94.7 },
-      { name: "Transformer", accuracy: 93.1 },
-      { name: "GNN", accuracy: 90.3 },
-    ],
-  };
 }

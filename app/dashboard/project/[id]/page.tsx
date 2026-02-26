@@ -19,6 +19,8 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useAuth } from "@clerk/nextjs";
+import { parseEEGFile, extractEEGFeatures, detectAnomalies } from "@/lib/eegParser";
+import { useAction } from "convex/react";
 
 const tabs = [
   { id: "overview", label: "Overview" },
@@ -37,6 +39,8 @@ export default function ProjectAnalysisPage() {
   const [activeTab, setActiveTab] = useState("overview");
   const [isUploading, setIsUploading] = useState(false);
   const [showUploadForm, setShowUploadForm] = useState(true);
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [uploadProgress, setUploadProgress] = useState("");
 
   // Form state
   const [patientName, setPatientName] = useState("");
@@ -54,31 +58,92 @@ export default function ProjectAnalysisPage() {
   const latestAnalysis = analyses?.[0];
 
   const createAnalysis = useMutation(api.eegAnalyses.createAnalysis);
+  const processEEGData = useMutation(api.eegAnalyses.processEEGData);
+  const analyzeWithAI = useAction(api.ai.analyzeEEGWithAI);
+  const generateUploadUrl = useMutation(api.storage.generateUploadUrl);
 
-  const handleRunDemoAnalysis = async () => {
+  const handleFileUpload = async (file: File) => {
+    setUploadedFile(file);
+    setUploadProgress(`Selected: ${file.name}`);
+  };
+
+  const handleRunAnalysis = async () => {
     if (!patientName.trim()) {
       alert("Please enter patient name");
       return;
     }
 
+    if (!uploadedFile) {
+      alert("Please upload an EEG file to analyze");
+      return;
+    }
+
     setIsUploading(true);
+    
     try {
-      await createAnalysis({
+      // Create initial analysis record - REAL DATA ONLY
+      const analysisId = await createAnalysis({
         projectId,
         patientName: patientName.trim(),
         patientId: `PT-${Date.now().toString().slice(-6)}`,
         age: age ? parseInt(age) : undefined,
         gender: gender || undefined,
-        fileName: "S001R02.edf",
-        isDemoMode: true,
+        fileName: uploadedFile.name,
+        isDemoMode: false, // Always false - real data only
       });
+
+      // Step 1: Parse EEG file with advanced spectral analysis
+      setUploadProgress("Parsing EEG data and extracting spectral features...");
+      
+      const { parseEEGFile, extractEEGFeatures, detectAnomalies } = await import("@/lib/eegParser");
+      const { performAdvancedAnalysis } = await import("@/lib/advancedEEGAnalysis");
+      
+      const parsedData = await parseEEGFile(uploadedFile);
+      setUploadProgress(`✓ Parsed ${parsedData.channels.length} channels at ${parsedData.samplingRate} Hz`);
+      
+      // Step 2: Extract basic features (for backwards compatibility)
+      const features = extractEEGFeatures(parsedData);
+      const anomalousChannels = detectAnomalies(parsedData);
+      setUploadProgress("Extracting advanced spectral biomarkers...");
+      
+      // Step 3: Perform advanced spectral analysis (FFT, connectivity, complexity)
+      const advancedMetrics = await performAdvancedAnalysis(parsedData);
+      setUploadProgress(
+        `✓ Spectral analysis complete: Delta/Theta ratio ${advancedMetrics.spectralAnalyses[0]?.deltaTheta.toFixed(2) || '?'}`
+      );
+      
+      // Step 4: Process data in Convex for visualization generation
+      setUploadProgress("Generating visualizations from real data...");
+      await processEEGData({
+        analysisId: analysisId as any,
+        parsedData: JSON.stringify(parsedData),
+        features: JSON.stringify(features),
+        anomalousChannels,
+      });
+      setUploadProgress("✓ Waveforms, SHAP, and brain maps generated");
+      
+      // Step 5: Run advanced AI analysis with real biomarkers
+      setUploadProgress("Running AI analysis on advanced metrics...");
+      await analyzeWithAI({
+        analysisId: analysisId as any,
+        advancedMetrics,
+        anomalousChannels,
+        channelCount: parsedData.channels.length,
+      });
+      
+      setUploadProgress("✓ AI analysis complete!");
+      
+      // Clear form
       setShowUploadForm(false);
       setPatientName("");
       setAge("");
       setGender("");
+      setUploadedFile(null);
+      setUploadProgress("");
     } catch (error) {
-      console.error("Failed to create analysis:", error);
-      alert("Failed to create analysis. Please try again.");
+      console.error("Analysis failed:", error);
+      alert("Failed to analyze EEG file: " + (error as Error).message);
+      setUploadProgress("");
     } finally {
       setIsUploading(false);
     }
@@ -172,7 +237,10 @@ export default function ProjectAnalysisPage() {
             gender={gender}
             setGender={setGender}
             isUploading={isUploading}
-            onRunDemo={handleRunDemoAnalysis}
+            uploadProgress={uploadProgress}
+            uploadedFile={uploadedFile}
+            onFileUpload={handleFileUpload}
+            onRunAnalysis={handleRunAnalysis}
           />
         ) : (
           <>
@@ -218,30 +286,122 @@ export default function ProjectAnalysisPage() {
 }
 
 // Upload Section Component
-function UploadSection({ patientName, setPatientName, age, setAge, gender, setGender, isUploading, onRunDemo }: any) {
+function UploadSection({ 
+  patientName, 
+  setPatientName, 
+  age, 
+  setAge, 
+  gender, 
+  setGender, 
+  isUploading, 
+  uploadProgress,
+  uploadedFile,
+  onFileUpload, 
+  onRunAnalysis 
+}: any) {
+  const [isDragging, setIsDragging] = useState(false);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    
+    const files = e.dataTransfer.files;
+    if (files.length > 0) {
+      handleFileSelect(files[0]);
+    }
+  };
+
+  const handleFileSelect = (file: File) => {
+    const validExtensions = ['.edf', '.csv', '.txt', '.mat', '.eeg'];
+    const extension = '.' + file.name.split('.').pop()?.toLowerCase();
+    
+    if (!validExtensions.includes(extension)) {
+      alert(`Unsupported file type. Please upload: ${validExtensions.join(', ')}`);
+      return;
+    }
+    
+    onFileUpload(file);
+  };
+
+  const handleClick = () => {
+    fileInputRef.current?.click();
+  };
+
   return (
     <div className="space-y-6">
       {/* File Upload */}
-      <div className="border-2 border-dashed border-foreground/20 rounded-2xl p-12 text-center hover:border-foreground/40 transition-colors bg-linear-to-br from-foreground/5 to-foreground/2">
-        <div className="mx-auto w-16 h-16 mb-6 rounded-2xl bg-foreground/10 flex items-center justify-center">
-          <Upload className="h-8 w-8" />
+      <div 
+        onClick={handleClick}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        className={`border-2 border-dashed rounded-2xl p-12 text-center transition-all cursor-pointer bg-linear-to-br from-foreground/5 to-foreground/2 ${
+          isDragging 
+            ? 'border-cyan-400 bg-cyan-500/10' 
+            : uploadedFile
+            ? 'border-green-400/50 bg-green-500/5'
+            : 'border-foreground/20 hover:border-foreground/40'
+        }`}>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".edf,.csv,.txt,.mat,.eeg"
+          onChange={(e) => {
+            const files = e.target.files;
+            if (files && files.length > 0) {
+              handleFileSelect(files[0]);
+            }
+          }}
+          className="hidden"
+        />
+        <div className={`mx-auto w-16 h-16 mb-6 rounded-2xl flex items-center justify-center ${
+          uploadedFile ? 'bg-green-500/20' : 'bg-foreground/10'
+        }`}>
+          {uploadedFile ? (
+            <CheckCircle className="h-8 w-8 text-green-400" />
+          ) : (
+            <Upload className="h-8 w-8" />
+          )}
         </div>
-        <h2 className="text-2xl font-bold mb-2">Drop EEG file here or click to browse</h2>
-        <p className="text-muted-foreground mb-4">
-          .edf · .csv · .mat · .eeg — up to 64 channels
-        </p>
+        {uploadedFile ? (
+          <>
+            <h2 className="text-2xl font-bold mb-2 text-green-400">File Selected</h2>
+            <p className="text-muted-foreground mb-2">{uploadedFile.name}</p>
+            <p className="text-xs text-muted-foreground">
+              {(uploadedFile.size / 1024).toFixed(2)} KB • Click to change file
+            </p>
+          </>
+        ) : (
+          <>
+            <h2 className="text-2xl font-bold mb-2">Drop EEG file here or click to browse</h2>
+            <p className="text-muted-foreground mb-4">
+              .edf · .csv · .mat · .eeg — up to 64 channels
+            </p>
+          </>
+        )}
       </div>
 
-      {/* Demo Mode Banner */}
-      <div className="bg-yellow-500/10 border border-yellow-500/20 rounded-xl p-4 flex items-start gap-3">
-        <Zap className="h-5 w-5 text-yellow-500 shrink-0 mt-0.5" />
-        <div>
-          <p className="font-semibold text-yellow-500 mb-1">Demo Mode:</p>
-          <p className="text-sm text-muted-foreground">
-            No file? No problem — we'll simulate a realistic EEG dataset for demonstration.
-          </p>
+      {/* Upload Progress */}
+      {uploadProgress && (
+        <div className="bg-cyan-500/10 border border-cyan-500/20 rounded-xl p-4 flex items-start gap-3">
+          <Activity className="h-5 w-5 text-cyan-400 shrink-0 mt-0.5 animate-pulse" />
+          <div>
+            <p className="font-semibold text-cyan-400 mb-1">Processing:</p>
+            <p className="text-sm text-muted-foreground">{uploadProgress}</p>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Patient Information */}
       <div className="bg-linear-to-br from-foreground/5 to-foreground/2 border border-foreground/10 rounded-2xl p-8">
@@ -260,7 +420,8 @@ function UploadSection({ patientName, setPatientName, age, setAge, gender, setGe
               value={patientName}
               onChange={(e) => setPatientName(e.target.value)}
               placeholder="Full name"
-              className="w-full px-4 py-3 rounded-xl border border-foreground/10 bg-background focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500/20 transition-all"
+              disabled={isUploading}
+              className="w-full px-4 py-3 rounded-xl border border-foreground/10 bg-background focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500/20 transition-all disabled:opacity-50"
             />
           </div>
 
@@ -285,7 +446,8 @@ function UploadSection({ patientName, setPatientName, age, setAge, gender, setGe
               value={age}
               onChange={(e) => setAge(e.target.value)}
               placeholder="e.g. 28"
-              className="w-full px-4 py-3 rounded-xl border border-foreground/10 bg-background focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500/20 transition-all"
+              disabled={isUploading}
+              className="w-full px-4 py-3 rounded-xl border border-foreground/10 bg-background focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500/20 transition-all disabled:opacity-50"
             />
           </div>
 
@@ -296,7 +458,8 @@ function UploadSection({ patientName, setPatientName, age, setAge, gender, setGe
             <select
               value={gender}
               onChange={(e) => setGender(e.target.value)}
-              className="w-full px-4 py-3 rounded-xl border border-foreground/10 bg-background focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500/20 transition-all">
+              disabled={isUploading}
+              className="w-full px-4 py-3 rounded-xl border border-foreground/10 bg-background focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500/20 transition-all disabled:opacity-50">
               <option value="">Select...</option>
               <option value="Male">Male</option>
               <option value="Female">Female</option>
@@ -306,20 +469,20 @@ function UploadSection({ patientName, setPatientName, age, setAge, gender, setGe
         </div>
       </div>
 
-      {/* Run Analysis Button */}
+      {/* Run Analysis Button - FILE REQUIRED */}
       <Button
-        onClick={onRunDemo}
-        disabled={isUploading || !patientName.trim()}
-        className="w-full h-14 rounded-xl text-lg font-semibold bg-linear-to-r from-cyan-500 to-blue-500 hover:from-cyan-600 hover:to-blue-600">
+        onClick={onRunAnalysis}
+        disabled={isUploading || !patientName.trim() || !uploadedFile}
+        className="w-full h-14 rounded-xl text-lg font-semibold bg-linear-to-r from-cyan-500 to-blue-500 hover:from-cyan-600 hover:to-blue-600 disabled:opacity-50 disabled:cursor-not-allowed">
         {isUploading ? (
           <>
             <div className="animate-spin h-5 w-5 border-3 border-white/30 border-t-white rounded-full mr-3" />
-            Processing...
+            {uploadProgress || "Analyzing..."}
           </>
         ) : (
           <>
             <Brain className="h-5 w-5 mr-3" />
-            Run Demo Analysis
+            {uploadedFile ? "Run Advanced AI Analysis" : "Upload EEG File to Continue"}
           </>
         )}
       </Button>
