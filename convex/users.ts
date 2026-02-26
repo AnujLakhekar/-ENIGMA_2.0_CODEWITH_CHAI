@@ -10,7 +10,7 @@ export const getAuthenticatedUser = async (ctx: QueryCtx | MutationCtx) => {
   
   const user = await ctx.db
     .query("users")
-    .filter((q) => q.eq(q.field("tokenIdentifier"), identity.tokenIdentifier))
+    .filter((q) => q.eq(q.field("tokenIdentifier"), identity.subject))
     .unique();
 
   return user;

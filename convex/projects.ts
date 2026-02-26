@@ -14,22 +14,13 @@ export const createProject = mutation({
       throw new ConvexError("User not authenticated");
     }
 
-    let user = await ctx.db
+    const user = await ctx.db
       .query("users")
-      .filter((q) => q.eq(q.field("tokenIdentifier"), identity.tokenIdentifier))
+      .filter((q) => q.eq(q.field("tokenIdentifier"), identity.subject))
       .unique();
     
-    // If user doesn't exist yet, create them
     if (!user) {
-      const userId = await ctx.db.insert("users", {
-        name: identity.name || identity.email || "User",
-        email: identity.email,
-        tokenIdentifier: identity.tokenIdentifier,
-      });
-      user = await ctx.db.get(userId);
-      if (!user) {
-        throw new ConvexError("Failed to create user");
-      }
+      throw new ConvexError("User profile not found. Please try signing out and signing in again.");
     }
 
     const projectId = await ctx.db.insert("projects", {
@@ -59,7 +50,7 @@ export const getUserProjects = query({
 
     const user = await ctx.db
       .query("users")
-      .filter((q) => q.eq(q.field("tokenIdentifier"), identity.tokenIdentifier))
+      .filter((q) => q.eq(q.field("tokenIdentifier"), identity.subject))
       .unique();
     
     if (!user) {
@@ -67,15 +58,13 @@ export const getUserProjects = query({
       return [];
     }
 
-    if (!user.projectIds || user.projectIds.length === 0) {
-      return [];
-    }
+    // Query projects directly by owner field
+    const projects = await ctx.db
+      .query("projects")
+      .withIndex("by_owner", (q) => q.eq("owner", user._id))
+      .collect();
 
-    const projects = await Promise.all(
-      user.projectIds.map((projectId) => ctx.db.get(projectId))
-    );
-
-    return projects.filter((p) => p !== null);
+    return projects;
   },
 });
 
@@ -84,10 +73,18 @@ export const getProjectById = query({
     projectId: v.id("projects"),
   },
   handler: async (ctx, { projectId }) => {
-    const user = await getAuthenticatedUser(ctx);
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) {
+      throw new ConvexError("Not authenticated");
+    }
+
+    const user = await ctx.db
+      .query("users")
+      .filter((q) => q.eq(q.field("tokenIdentifier"), identity.subject))
+      .unique();
     
     if (!user) {
-      throw new ConvexError("User not authenticated");
+      throw new ConvexError("User profile not found. Please sign out and sign in again.");
     }
 
     const project = await ctx.db.get(projectId);
@@ -112,10 +109,18 @@ export const updateProject = mutation({
     description: v.optional(v.string()),
   },
   handler: async (ctx, { projectId, name, description }) => {
-    const user = await getAuthenticatedUser(ctx);
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) {
+      throw new ConvexError("Not authenticated");
+    }
+
+    const user = await ctx.db
+      .query("users")
+      .filter((q) => q.eq(q.field("tokenIdentifier"), identity.subject))
+      .unique();
     
     if (!user) {
-      throw new ConvexError("User not authenticated");
+      throw new ConvexError("User profile not found");
     }
 
     const project = await ctx.db.get(projectId);
@@ -145,10 +150,18 @@ export const deleteProject = mutation({
     projectId: v.id("projects"),
   },
   handler: async (ctx, { projectId }) => {
-    const user = await getAuthenticatedUser(ctx);
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) {
+      throw new ConvexError("Not authenticated");
+    }
+
+    const user = await ctx.db
+      .query("users")
+      .filter((q) => q.eq(q.field("tokenIdentifier"), identity.subject))
+      .unique();
     
     if (!user) {
-      throw new ConvexError("User not authenticated");
+      throw new ConvexError("User profile not found");
     }
 
     const project = await ctx.db.get(projectId);

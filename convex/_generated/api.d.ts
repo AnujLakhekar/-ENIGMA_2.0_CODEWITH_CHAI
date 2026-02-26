@@ -8,8 +8,11 @@
  * @module
  */
 
+import type * as ai from "../ai.js";
+import type * as eegAnalyses from "../eegAnalyses.js";
 import type * as http from "../http.js";
 import type * as projects from "../projects.js";
+import type * as storage from "../storage.js";
 import type * as users from "../users.js";
 
 import type {
@@ -19,8 +22,11 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  ai: typeof ai;
+  eegAnalyses: typeof eegAnalyses;
   http: typeof http;
   projects: typeof projects;
+  storage: typeof storage;
   users: typeof users;
 }>;
 
